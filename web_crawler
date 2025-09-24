@@ -1,0 +1,99 @@
+import os
+import time
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+from collections import deque
+
+def sanitize_filename(url):
+    """URL을 안전한 파일 이름으로 변환합니다."""
+    parsed_url = urlparse(url)
+    path = parsed_url.path
+    
+    # 루트 경로는 index.txt로 처리
+    if path == '/' or not path:
+        filename = "index.txt"
+    else:
+        # 경로에서 앞뒤 '/'를 제거하고, 중간 '/'는 '_'로 변경
+        filename = path.strip('/').replace('/', '_') + ".txt"
+    
+    # 파일 이름에 유효하지 않은 문자 제거 (필요에 따라 추가)
+    invalid_chars = ['<', '>', ':', '"', '|', '?', '*']
+    for char in invalid_chars:
+        filename = filename.replace(char, '')
+        
+    return filename
+
+def crawl_website(base_url):
+    """웹사이트를 크롤링하여 모든 페이지의 텍스트를 파일로 저장합니다."""
+    output_dir = "crawled_text"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    urls_to_crawl = deque([base_url])
+    visited_urls = set()
+    
+    # User-Agent 설정 (차단 방지)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
+    while urls_to_crawl:
+        current_url = urls_to_crawl.popleft()
+        
+        if current_url in visited_urls:
+            continue
+            
+        try:
+            print(f"크롤링 중: {current_url}")
+            response = requests.get(current_url, headers=headers, timeout=10)
+            response.raise_for_status() # 오류가 발생하면 예외를 발생시킴
+            
+            # 이미 방문한 URL로 추가
+            visited_urls.add(current_url)
+
+            # UTF-8로 인코딩 설정
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # 스크립트, 스타일, 이미지 태그 제거
+            for element in soup(["script", "style", "img"]):
+                element.decompose()
+            
+            # 텍스트 추출
+            text = soup.get_text(separator='\n', strip=True)
+            
+            # 파일로 저장
+            filename = sanitize_filename(current_url)
+            filepath = os.path.join(output_dir, filename)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(text)
+            print(f"저장 완료: {filepath}")
+
+            # 페이지 내의 모든 링크 찾기
+            for link_tag in soup.find_all('a', href=True):
+                href = link_tag['href']
+                
+                # 절대 URL로 변환
+                full_url = urljoin(base_url, href)
+                
+                # URL에서 fragment 제거 (예: #section)
+                full_url = full_url.split('#')[0]
+                
+                # 외부 링크, javascript 링크 등은 제외하고 동일한 도메인의 URL만 추가
+                if urlparse(full_url).netloc == urlparse(base_url).netloc:
+                    if full_url not in visited_urls:
+                        urls_to_crawl.append(full_url)
+
+        except requests.exceptions.RequestException as e:
+            print(f"오류 발생: {current_url} - {e}")
+        except Exception as e:
+            print(f"알 수 없는 오류 발생: {current_url} - {e}")
+        finally:
+            # 서버 부하를 줄이기 위해 각 요청 후 2초 대기
+            print("2초 대기...")
+            time.sleep(2)
+
+if __name__ == "__main__":
+    start_url = "https://stockstalker.co.kr/"
+    crawl_website(start_url)
+    print("\n크롤링이 완료되었습니다.")
